@@ -1,9 +1,10 @@
 from flask import Flask, request, jsonify, render_template
 from tensorflow.keras.models import load_model
 import numpy as np
-from datetime import datetime
-import pandas as pd  # For reading the SUN_MOON-2025 file
+from datetime import datetime, timedelta
+import pandas as pd
 import requests
+from calendar import monthrange
 
 # Load the trained LSTM model
 model = load_model('model/best_lstm_model_final.h5', compile=False)
@@ -14,15 +15,9 @@ longitude_min, longitude_max = 120.0, 130.0
 depth_min, depth_max = 0.0, 50.0
 magnitude_min, magnitude_max = 3.0, 8.0
 
-# Valid range for the Philippines
-philippines_lat_min, philippines_lat_max = 4.0, 21.0
-philippines_lon_min, philippines_lon_max = 116.0, 127.0
-
-# Year range for scaling
-year_min, year_max = 2016, 2024
-month_min, month_max = 1, 12
-day_min, day_max = 1, 31
-hour_min, hour_max = 0, 23
+# Threshold for significant earthquake
+MAGNITUDE_THRESHOLD = 5.0
+CONSECUTIVE_DAYS_THRESHOLD = 3  # Minimum consecutive days for a true earthquake
 
 # Geocoding API configuration
 GEOCODING_API_KEY = "a60803bd9c024c418324bcb0155f9b57"
@@ -30,8 +25,6 @@ GEOCODING_API_URL = "https://api.opencagedata.com/geocode/v1/json"
 
 # Load sun and moon distances from the file
 sun_moon_data = pd.read_csv('distances/SUN_MOON-2025.csv', parse_dates=['Date'])
-
-# Autofill missing times in the dataset with 00:00:00
 sun_moon_data['Date'] = sun_moon_data['Date'].apply(lambda x: x.strftime('%Y-%m-%d') + " 00:00:00")
 sun_moon_data['Date'] = pd.to_datetime(sun_moon_data['Date'])
 
@@ -66,18 +59,6 @@ def get_sun_moon_distances(date_time):
     else:
         raise ValueError("Sun and moon distances not found for the specified date and time.")
 
-def validate_inputs(lat, lon, depth, date_time):
-    errors = []
-    if not (philippines_lat_min <= lat <= philippines_lat_max):
-        errors.append(f"Latitude {lat} is outside the Philippines' range.")
-    if not (philippines_lon_min <= lon <= philippines_lon_max):
-        errors.append(f"Longitude {lon} is outside the Philippines' range.")
-    if not (depth_min <= depth <= depth_max):
-        errors.append(f"Depth {depth} is outside the valid range ({depth_min}-{depth_max}).")
-    if date_time <= datetime.now():
-        errors.append("Date and time must be in the future.")
-    return errors
-
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -88,51 +69,89 @@ def predict():
     try:
         # Extract input values from the request
         place = data['place']
-        depth = float(data['depth'])
-        date_str = data['datetime']
-
-        # Autofill time if missing and convert to datetime
-        date_time = datetime.strptime(date_str, "%Y-%m-%dT%H:%M")
+        start_month = int(data['start_month'])
+        end_month = int(data['end_month'])
 
         # Geocode the place to get latitude and longitude
         lat, lon = geocode_place(place)
 
-        # Get sun and moon distance data
-        sun_distance, moon_distance = get_sun_moon_distances(date_time)
+        # Ensure the months are within range
+        if not (1 <= start_month <= 12) or not (1 <= end_month <= 12):
+            return jsonify({"error": "Invalid month range. Only months between 1 and 12 are allowed."}), 400
 
-        # Validate inputs
-        errors = validate_inputs(lat, lon, depth, date_time)
-        if errors:
-            return jsonify({"errors": errors}), 400
+        # Prepare results for each month
+        predictions = []
 
-        # Scale inputs
-        latitude_scaled = minmax_scale(lat, latitude_min, latitude_max)
-        longitude_scaled = minmax_scale(lon, longitude_min, longitude_max)
-        depth_scaled = minmax_scale(depth, depth_min, depth_max)
-        sun_distance_scaled = minmax_scale(sun_distance, sun_moon_data['sun_distance'].min(), sun_moon_data['sun_distance'].max())
-        moon_distance_scaled = minmax_scale(moon_distance, sun_moon_data['moon_distance'].min(), sun_moon_data['moon_distance'].max())
-        year_scaled = minmax_scale(date_time.year, year_min, year_max)
-        month_scaled = minmax_scale(date_time.month, month_min, month_max)
-        day_scaled = minmax_scale(date_time.day, day_min, day_max)
-        hour_scaled = minmax_scale(date_time.hour, hour_min, hour_max)
+        # Loop through the selected months (from start to end month)
+        for month in range(start_month, end_month + 1):
+            # Get the number of days in the month
+            _, num_days = monthrange(2025, month)
 
-        # Prepare the input array (ensure the shape is correct for LSTM)
-        inputs = np.array([[latitude_scaled, longitude_scaled, depth_scaled, year_scaled, month_scaled, day_scaled, hour_scaled, sun_distance_scaled, moon_distance_scaled]])
-        inputs = np.expand_dims(inputs, axis=0)  # Ensure batch size dimension is added
+            # Loop through each day in the month
+            for day in range(1, num_days + 1):
+                date_time = datetime(2025, month, day, 0, 0)
 
-        # Make prediction
-        normalized_prediction = model.predict(inputs)[0]
-        actual_magnitude = float(minmax_inverse_scale(normalized_prediction, magnitude_min, magnitude_max))
+                try:
+                    # Get sun and moon distances
+                    sun_distance, moon_distance = get_sun_moon_distances(date_time)
 
-        return jsonify({
-            "place": place,
-            "latitude": lat,
-            "longitude": lon,
-            "depth": depth,
-            "sun_distance": float(sun_distance),
-            "moon_distance": float(moon_distance),
-            "predicted_magnitude": round(actual_magnitude, 2)
-        })
+                    # Scale inputs
+                    latitude_scaled = minmax_scale(lat, latitude_min, latitude_max)
+                    longitude_scaled = minmax_scale(lon, longitude_min, longitude_max)
+                    depth_scaled = minmax_scale(10, depth_min, depth_max)  # Example depth at 10 km
+                    sun_distance_scaled = minmax_scale(sun_distance, sun_moon_data['sun_distance'].min(), sun_moon_data['sun_distance'].max())
+                    moon_distance_scaled = minmax_scale(moon_distance, sun_moon_data['moon_distance'].min(), sun_moon_data['moon_distance'].max())
+                    year_scaled = minmax_scale(date_time.year, 2016, 2025)
+                    month_scaled = minmax_scale(month, 1, 12)
+                    day_scaled = minmax_scale(day, 1, num_days)
+
+                    # Prepare the input array (ensure the shape is correct for LSTM)
+                    inputs = np.array([[latitude_scaled, longitude_scaled, depth_scaled, year_scaled, month_scaled, day_scaled, 0, sun_distance_scaled, moon_distance_scaled]])
+                    inputs = np.expand_dims(inputs, axis=0)  # Add batch dimension
+
+                    # Make prediction
+                    normalized_prediction = model.predict(inputs)[0]
+                    actual_magnitude = float(minmax_inverse_scale(normalized_prediction, magnitude_min, magnitude_max))
+
+                    # Only consider significant predictions
+                    if actual_magnitude >= MAGNITUDE_THRESHOLD:
+                        predictions.append({
+                            "date": date_time,
+                            "predicted_magnitude": actual_magnitude
+                        })
+
+                except ValueError:
+                    continue
+
+        # Analyze predictions for consecutive significant earthquakes
+        if predictions:
+            predictions = sorted(predictions, key=lambda x: x['date'])
+
+            consecutive_quakes = []
+            current_streak = [predictions[0]]
+
+            for i in range(1, len(predictions)):
+                if (predictions[i]['date'] - predictions[i - 1]['date']).days <= 1:
+                    current_streak.append(predictions[i])
+                else:
+                    if len(current_streak) >= CONSECUTIVE_DAYS_THRESHOLD:
+                        consecutive_quakes.append(current_streak)
+                    current_streak = [predictions[i]]
+
+            if len(current_streak) >= CONSECUTIVE_DAYS_THRESHOLD:
+                consecutive_quakes.append(current_streak)
+
+            if consecutive_quakes:
+                most_likely_quake = max(consecutive_quakes, key=lambda x: max(q['predicted_magnitude'] for q in x))
+                start_date = most_likely_quake[0]['date']
+                end_date = most_likely_quake[-1]['date']
+                return jsonify({
+                    "place": place,
+                    "message": f"A significant earthquake is likely to occur between {start_date.strftime('%B %d')} and {end_date.strftime('%B %d')}.",
+                    "details": most_likely_quake
+                })
+
+        return jsonify({"place": place, "message": "It is unlikely for an earthquake to occur this month."})
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500

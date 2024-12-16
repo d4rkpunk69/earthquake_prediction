@@ -4,62 +4,167 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Earthquake Prediction</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bootstrap/5.1.3/css/bootstrap.min.css">
+    <style>
+        body {
+            padding: 20px;
+        }
+        .result-container {
+            margin-top: 30px;
+            border: 1px solid #ddd;
+            padding: 15px;
+            background-color: #f9f9f9;
+            border-radius: 8px;
+        }
+        .error-message {
+            color: red;
+        }
+        .loading-indicator {
+            text-align: center;
+            display: none;
+        }
+    </style>
 </head>
 <body>
     <div class="container">
-        <h1>Earthquake Magnitude Predictor</h1>
-        <form id="predictForm">
-            <div class="form-group">
-                <label for="place">Location:</label>
-                <input type="text" id="place" name="place" required>
+        <h1 class="text-center">Earthquake Prediction System</h1>
+        <p class="text-center">Predict the likelihood and magnitude of an earthquake based on location, month range, and other factors.</p>
+
+        <!-- Form for user input -->
+        <form id="prediction-form">
+            <div class="mb-3">
+                <label for="place" class="form-label">Enter Location (e.g., Anda, Bohol)</label>
+                <input type="text" class="form-control" id="place" required>
             </div>
-            <div class="form-group">
-                <label for="depth">Depth (km):</label>
-                <input type="number" id="depth" name="depth" step="0.1" required>
+            <div class="mb-3">
+                <label for="start-month" class="form-label">Start Month</label>
+                <select class="form-control" id="start-month" required>
+                    <option value="1">January</option>
+                    <option value="2">February</option>
+                    <option value="3">March</option>
+                    <option value="4">April</option>
+                    <option value="5">May</option>
+                    <option value="6">June</option>
+                    <option value="7">July</option>
+                    <option value="8">August</option>
+                    <option value="9">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                </select>
             </div>
-            <div class="form-group">
-                <label for="datetime">Date and Time:</label>
-                <input type="datetime-local" id="datetime" name="datetime" required>
+            <div class="mb-3">
+                <label for="end-month" class="form-label">End Month</label>
+                <select class="form-control" id="end-month" required>
+                    <option value="1">January</option>
+                    <option value="2">February</option>
+                    <option value="3">March</option>
+                    <option value="4">April</option>
+                    <option value="5">May</option>
+                    <option value="6">June</option>
+                    <option value="7">July</option>
+                    <option value="8">August</option>
+                    <option value="9">September</option>
+                    <option value="10">October</option>
+                    <option value="11">November</option>
+                    <option value="12">December</option>
+                </select>
             </div>
-            <button type="submit">Predict Magnitude</button>
+            <button type="submit" class="btn btn-primary w-100">Get Prediction</button>
         </form>
-        <div id="result" class="result-box"></div>
+
+        <!-- Loading Indicator -->
+        <div class="loading-indicator">
+            <div class="spinner-border text-primary" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p>Calculating prediction...</p>
+        </div>
+
+        <!-- Results section -->
+        <div id="result-container" class="result-container d-none">
+            <h4>Location: <span id="place-name"></span></h4>
+            <p><strong>Latitude:</strong> <span id="latitude"></span>, <strong>Longitude:</strong> <span id="longitude"></span></p>
+            <p><strong>Predicted Magnitude:</strong> <span id="predicted-magnitude"></span> (on <span id="prediction-date"></span>)</p>
+            <p><strong>Depth:</strong> <span id="depth"></span></p>
+            <p><strong>Sun Distance:</strong> <span id="sun-distance"></span></p>
+            <p><strong>Moon Distance:</strong> <span id="moon-distance"></span></p>
+            <p><strong>Message:</strong> <span id="message"></span></p>
+        </div>
+
+        <!-- Error section -->
+        <div id="error-container" class="error-message d-none">
+            <p id="error-message"></p>
+        </div>
     </div>
 
+    <!-- JavaScript -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <script>
-        document.getElementById('predictForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const formData = {
-                place: document.getElementById('place').value,
-                depth: parseFloat(document.getElementById('depth').value),
-                datetime: document.getElementById('datetime').value,
-            };
+        $(document).ready(function () {
+            $('#prediction-form').submit(function (e) {
+                e.preventDefault();
 
-            const response = await fetch('/predict', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData),
+                // Get the values from the form
+                const place = $('#place').val();
+                const startMonth = $('#start-month').val();
+                const endMonth = $('#end-month').val();
+
+                // Clear previous results and error message
+                $('#result-container').addClass('d-none');
+                $('#error-container').addClass('d-none');
+                $('#error-message').empty();
+
+                // Show loading indicator
+                $('.loading-indicator').show();
+
+                // Send the data to the Flask server
+                $.ajax({
+                    url: '/predict',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        place: place,
+                        start_month: startMonth,
+                        end_month: endMonth
+                    }),
+                    success: function (response) {
+                        // Hide the loading indicator once response is received
+                        $('.loading-indicator').hide();
+
+                        if (response.error) {
+                            $('#error-message').text(response.error);
+                            $('#error-container').removeClass('d-none');
+                        } else {
+                            // Convert month number to full month name
+                            const monthNames = [
+                                "January", "February", "March", "April", "May", "June", 
+                                "July", "August", "September", "October", "November", "December"
+                            ];
+
+                            // Populate the result section
+                            $('#place-name').text(response.place);
+                            $('#latitude').text(response.latitude || 'N/A');
+                            $('#longitude').text(response.longitude || 'N/A');
+                            $('#predicted-magnitude').text(response.highest_magnitude);
+                            $('#prediction-date').text(`${monthNames[response.highest_magnitude_month - 1]} ${response.highest_magnitude_day}`);
+                            $('#depth').text(response.depth);
+                            $('#sun-distance').text(response.sun_distance);
+                            $('#moon-distance').text(response.moon_distance);
+                            $('#message').text(response.message);
+
+                            // Show the results
+                            $('#result-container').removeClass('d-none');
+                        }
+                    },
+                    error: function (xhr, status, error) {
+                        // Hide the loading indicator in case of error
+                        $('.loading-indicator').hide();
+                        $('#error-message').text('An error occurred while processing your request.');
+                        $('#error-container').removeClass('d-none');
+                    }
+                });
             });
-
-            const resultDiv = document.getElementById('result');
-            if (response.ok) {
-                const data = await response.json();
-                resultDiv.innerHTML = `
-                    <p><strong>Prediction Results:</strong></p>
-                    <p>Predicted Magnitude: <strong>${data.predicted_magnitude.toFixed(2)}</strong></p>
-                    <p>Latitude: ${data.latitude}</p>
-                    <p>Longitude: ${data.longitude}</p>
-                    <p>Depth: ${data.depth} km</p>
-                    <p>Sun Distance: ${data.sun_distance} km</p>
-                    <p>Moon Distance: ${data.moon_distance} km</p>
-                `;
-            } else {
-                const errorData = await response.json();
-                resultDiv.innerHTML = `
-                    <p class="error">Error: ${errorData.error || errorData.errors.join(', ')}</p>
-                `;
-            }
         });
     </script>
 </body>
