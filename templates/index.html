@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Earthquake Prediction</title>
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Earthquake Magnitude Predictor</h1>
+        <form id="predictForm">
+            <div class="form-group">
+                <label for="place">Location:</label>
+                <input type="text" id="place" name="place" required>
+            </div>
+            <div class="form-group">
+                <label for="depth">Depth (km):</label>
+                <input type="number" id="depth" name="depth" step="0.1" required>
+            </div>
+            <div class="form-group">
+                <label for="datetime">Date and Time:</label>
+                <input type="datetime-local" id="datetime" name="datetime" required>
+            </div>
+            <button type="submit">Predict Magnitude</button>
+        </form>
+        <div id="result" class="result-box"></div>
+    </div>
+
+    <script>
+        document.getElementById('predictForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const formData = {
+                place: document.getElementById('place').value,
+                depth: parseFloat(document.getElementById('depth').value),
+                datetime: document.getElementById('datetime').value,
+            };
+
+            const response = await fetch('/predict', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(formData),
+            });
+
+            const resultDiv = document.getElementById('result');
+            if (response.ok) {
+                const data = await response.json();
+                resultDiv.innerHTML = `
+                    <p><strong>Prediction Results:</strong></p>
+                    <p>Predicted Magnitude: <strong>${data.predicted_magnitude.toFixed(2)}</strong></p>
+                    <p>Latitude: ${data.latitude}</p>
+                    <p>Longitude: ${data.longitude}</p>
+                    <p>Depth: ${data.depth} km</p>
+                    <p>Sun Distance: ${data.sun_distance} km</p>
+                    <p>Moon Distance: ${data.moon_distance} km</p>
+                `;
+            } else {
+                const errorData = await response.json();
+                resultDiv.innerHTML = `
+                    <p class="error">Error: ${errorData.error || errorData.errors.join(', ')}</p>
+                `;
+            }
+        });
+    </script>
+</body>
+</html>

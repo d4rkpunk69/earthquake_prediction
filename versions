@@ -1,0 +1,400 @@
+from flask import Flask, request, jsonify, render_template
+from tensorflow.keras.models import load_model
+import numpy as np
+from datetime import datetime, timedelta
+import requests
+
+# Load the trained LSTM model
+model = load_model('model/best_lstm_model.h5', compile=False)
+
+# Min and max values used in MinMaxScaler during preprocessing
+latitude_min, latitude_max = 10.0, 20.0
+longitude_min, longitude_max = 120.0, 130.0
+depth_min, depth_max = 0.0, 50.0
+
+# Valid range for the Philippines (approximate bounds)
+philippines_lat_min, philippines_lat_max = 4.0, 21.0
+philippines_lon_min, philippines_lon_max = 116.0, 127.0
+
+# Geocoding API configuration (replace with your API key)
+GEOCODING_API_KEY = "a60803bd9c024c418324bcb0155f9b57"
+GEOCODING_API_URL = "https://api.opencagedata.com/geocode/v1/json"
+
+app = Flask(__name__)
+
+def geocode_place(place):
+    """Convert a place name to latitude and longitude using a geocoding API."""
+    params = {"q": place, "key": GEOCODING_API_KEY}
+    response = requests.get(GEOCODING_API_URL, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data['results']:
+            lat = data['results'][0]['geometry']['lat']
+            lon = data['results'][0]['geometry']['lng']
+            return lat, lon
+        else:
+            raise ValueError(f"Place '{place}' not found.")
+    else:
+        raise ValueError("Error in geocoding API request.")
+
+def minmax_scale(value, min_val, max_val):
+    return (value - min_val) / (max_val - min_val)
+
+def validate_inputs(lat, lon, depth, sun_distance, moon_distance, date_time):
+    errors = []
+    if not (philippines_lat_min <= lat <= philippines_lat_max):
+        errors.append(f"Latitude {lat} is outside the Philippines' range.")
+    if not (philippines_lon_min <= lon <= philippines_lon_max):
+        errors.append(f"Longitude {lon} is outside the Philippines' range.")
+    if not (depth_min <= depth <= depth_max):
+        errors.append(f"Depth {depth} is outside the valid range ({depth_min}-{depth_max}).")
+    current_time = datetime.now()
+    if date_time <= current_time + timedelta(hours=1):
+        errors.append("Date and time must be at least 1 hour in the future.")
+    if sun_distance <= 0:
+        errors.append("Sun distance must be a positive value.")
+    if moon_distance <= 0:
+        errors.append("Moon distance must be a positive value.")
+    return errors
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.json
+    try:
+        # Extract input values from the request
+        place = data['place']
+        depth = float(data['depth'])
+        date_time = datetime.strptime(data['datetime'], "%Y-%m-%dT%H:%M")
+
+        # Geocode the place to get latitude and longitude
+        lat, lon = geocode_place(place)
+
+        # Get sun and moon distance data
+        sun_distance = float(data['sun_distance'])
+        moon_distance = float(data['moon_distance'])
+
+        # Validate inputs
+        errors = validate_inputs(lat, lon, depth, sun_distance, moon_distance, date_time)
+        if errors:
+            return jsonify({"errors": errors}), 400
+
+        # Scale inputs
+        latitude_scaled = minmax_scale(lat, latitude_min, latitude_max)
+        longitude_scaled = minmax_scale(lon, longitude_min, longitude_max)
+        depth_scaled = minmax_scale(depth, depth_min, depth_max)
+        sun_distance_scaled = minmax_scale(sun_distance, 0, 1)
+        moon_distance_scaled = minmax_scale(moon_distance, 0, 1)
+
+        # Prepare the input array
+        inputs = np.array([[latitude_scaled, longitude_scaled, depth_scaled, sun_distance_scaled, moon_distance_scaled]])
+        inputs = np.expand_dims(inputs, axis=1)  # Adjust dimensions for LSTM
+
+        # Make prediction
+        predicted_magnitude = model.predict(inputs)[0][0]
+
+        return jsonify({
+            "place": place,
+            "latitude": lat,
+            "longitude": lon,
+            "depth": depth,
+            "sun_distance": sun_distance,
+            "moon_distance": moon_distance,
+            "predicted_magnitude": round(predicted_magnitude, 2)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+
+
+
+#########before distaance auto##################
+
+from flask import Flask, request, jsonify, render_template
+from tensorflow.keras.models import load_model # type: ignore
+import numpy as np
+from datetime import datetime, timedelta
+import requests
+
+# Load the trained LSTM model
+model = load_model('model/best_lstm_model_final.h5', compile=False)
+
+# Min and max values used in MinMaxScaler during preprocessing
+latitude_min, latitude_max = 10.0, 20.0
+longitude_min, longitude_max = 120.0, 130.0
+depth_min, depth_max = 0.0, 50.0
+sun_distance_min, sun_distance_max = 146000000, 153000000  # Sun distance in km
+moon_distance_min, moon_distance_max = 356500, 406700  # Moon distance in km
+magnitude_min, magnitude_max = 3.0, 8.0
+
+# Valid range for the Philippines (approximate bounds)
+philippines_lat_min, philippines_lat_max = 4.0, 21.0
+philippines_lon_min, philippines_lon_max = 116.0, 127.0
+
+
+year_min, year_max = 2016, 2024 # Example range 
+month_min, month_max = 1, 12 
+day_min, day_max = 1, 31 
+hour_min, hour_max = 0, 23
+
+# Geocoding API configuration (replace with your API key)
+GEOCODING_API_KEY = "a60803bd9c024c418324bcb0155f9b57"
+GEOCODING_API_URL = "https://api.opencagedata.com/geocode/v1/json"
+
+app = Flask(__name__)
+
+def geocode_place(place):
+    """Convert a place name to latitude and longitude using a geocoding API."""
+    params = {"q": place, "key": GEOCODING_API_KEY}
+    response = requests.get(GEOCODING_API_URL, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data['results']:
+            lat = data['results'][0]['geometry']['lat']
+            lon = data['results'][0]['geometry']['lng']
+            return lat, lon
+        else:
+            raise ValueError(f"Place '{place}' not found.")
+    else:
+        raise ValueError("Error in geocoding API request.")
+
+def minmax_scale(value, min_val, max_val):
+    return (value - min_val) / (max_val - min_val)\
+
+def minmax_inverse_scale(value, min_val, max_val):
+    return value * (max_val - min_val) + min_val
+
+def validate_inputs(lat, lon, depth, sun_distance, moon_distance, date_time):
+    errors = []
+    if not (philippines_lat_min <= lat <= philippines_lat_max):
+        errors.append(f"Latitude {lat} is outside the Philippines' range.")
+    if not (philippines_lon_min <= lon <= philippines_lon_max):
+        errors.append(f"Longitude {lon} is outside the Philippines' range.")
+    if not (depth_min <= depth <= depth_max):
+        errors.append(f"Depth {depth} is outside the valid range ({depth_min}-{depth_max}).")
+    if not (sun_distance_min <= sun_distance <= sun_distance_max):
+        errors.append(f"Distance of the sun {sun_distance} is outside the valid range ({sun_distance_min}-{sun_distance_max}).")
+    if not (moon_distance_min <= moon_distance <= moon_distance_max):
+        errors.append(f"Distance of the moon {moon_distance} is outside the valid range ({moon_distance_min}-{moon_distance_max}).")
+    
+    current_time = datetime.now()
+    if date_time <= current_time + timedelta(hours=1):
+        errors.append("Date and time must be at least 1 hour in the future.")
+    if sun_distance <= 0:
+        errors.append("Sun distance must be a positive value.")
+    if moon_distance <= 0:
+        errors.append("Moon distance must be a positive value.")
+    return errors
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.json
+    try:
+        # Extract input values from the request
+        place = data['place']
+        depth = float(data['depth'])
+        date_time = datetime.strptime(data['datetime'], "%Y-%m-%dT%H:%M")
+
+        # Geocode the place to get latitude and longitude
+        lat, lon = geocode_place(place)
+
+        # Get sun and moon distance data
+        sun_distance = float(data['sun_distance'])
+        moon_distance = float(data['moon_distance'])
+ 
+        # Validate inputs
+        errors = validate_inputs(lat, lon, depth, sun_distance, moon_distance, date_time)
+        if errors:
+            return jsonify({"errors": errors}), 400
+
+        # Scale inputs
+        latitude_scaled = minmax_scale(lat, latitude_min, latitude_max)
+        longitude_scaled = minmax_scale(lon, longitude_min, longitude_max)
+        depth_scaled = minmax_scale(depth, depth_min, depth_max)
+        sun_distance_scaled = minmax_scale(sun_distance, sun_distance_min, sun_distance_max)
+        moon_distance_scaled = minmax_scale(moon_distance, moon_distance_min, moon_distance_max)
+        year_scaled = minmax_scale(date_time.year, year_min, year_max)
+        month_scaled = minmax_scale(date_time.month, month_min, month_max)
+        day_scaled = minmax_scale(date_time.day, day_min, day_max) 
+        hour_scaled = minmax_scale(date_time.hour, hour_min, hour_max)
+
+        # Prepare the input array (ensure the shape is correct for LSTM)
+
+        year, month, day, hour = date_time.year, date_time.month, date_time.day, date_time.hour
+        inputs = np.array([[latitude_scaled, longitude_scaled, depth_scaled, year_scaled, month_scaled, day_scaled, hour_scaled, sun_distance_scaled, moon_distance_scaled]])
+        inputs = np.expand_dims(inputs, axis=0) # Ensure batch size dimension is added 
+       
+        # Make prediction
+        normalized_prediction = model.predict(inputs)[0]
+        actual_magnitude = float(minmax_inverse_scale(normalized_prediction, magnitude_min, magnitude_max))
+
+        return jsonify({
+            "place": place,
+            "latitude": lat,
+            "longitude": lon,
+            "depth": depth,
+            "sun_distance": sun_distance,
+            "moon_distance": moon_distance,
+            "predicted_magnitude": actual_magnitude
+            
+        })
+    
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+
+from flask import Flask, request, jsonify, render_template
+from tensorflow.keras.models import load_model # type: ignore
+import numpy as np
+from datetime import datetime, timedelta
+import requests
+
+# Load the trained LSTM model
+model = load_model('model/best_lstm_model_final.h5', compile=False)
+
+# Min and max values used in MinMaxScaler during preprocessing
+latitude_min, latitude_max = 10.0, 20.0
+longitude_min, longitude_max = 120.0, 130.0
+depth_min, depth_max = 0.0, 50.0
+sun_distance_min, sun_distance_max = 146000000, 153000000  # Sun distance in km
+moon_distance_min, moon_distance_max = 356500, 406700  # Moon distance in km
+magnitude_min, magnitude_max = 3.0, 8.0
+
+# Valid range for the Philippines (approximate bounds)
+philippines_lat_min, philippines_lat_max = 4.0, 21.0
+philippines_lon_min, philippines_lon_max = 116.0, 127.0
+
+
+year_min, year_max = 2016, 2024 # Example range 
+month_min, month_max = 1, 12 
+day_min, day_max = 1, 31 
+hour_min, hour_max = 0, 23
+
+# Geocoding API configuration (replace with your API key)
+GEOCODING_API_KEY = "a60803bd9c024c418324bcb0155f9b57"
+GEOCODING_API_URL = "https://api.opencagedata.com/geocode/v1/json"
+
+app = Flask(__name__)
+
+def geocode_place(place):
+    """Convert a place name to latitude and longitude using a geocoding API."""
+    params = {"q": place, "key": GEOCODING_API_KEY}
+    response = requests.get(GEOCODING_API_URL, params=params)
+    if response.status_code == 200:
+        data = response.json()
+        if data['results']:
+            lat = data['results'][0]['geometry']['lat']
+            lon = data['results'][0]['geometry']['lng']
+            return lat, lon
+        else:
+            raise ValueError(f"Place '{place}' not found.")
+    else:
+        raise ValueError("Error in geocoding API request.")
+
+def minmax_scale(value, min_val, max_val):
+    return (value - min_val) / (max_val - min_val)\
+
+def minmax_inverse_scale(value, min_val, max_val):
+    return value * (max_val - min_val) + min_val
+
+def validate_inputs(lat, lon, depth, sun_distance, moon_distance, date_time):
+    errors = []
+    if not (philippines_lat_min <= lat <= philippines_lat_max):
+        errors.append(f"Latitude {lat} is outside the Philippines' range.")
+    if not (philippines_lon_min <= lon <= philippines_lon_max):
+        errors.append(f"Longitude {lon} is outside the Philippines' range.")
+    if not (depth_min <= depth <= depth_max):
+        errors.append(f"Depth {depth} is outside the valid range ({depth_min}-{depth_max}).")
+    if not (sun_distance_min <= sun_distance <= sun_distance_max):
+        errors.append(f"Distance of the sun {sun_distance} is outside the valid range ({sun_distance_min}-{sun_distance_max}).")
+    if not (moon_distance_min <= moon_distance <= moon_distance_max):
+        errors.append(f"Distance of the moon {moon_distance} is outside the valid range ({moon_distance_min}-{moon_distance_max}).")
+    
+    current_time = datetime.now()
+    if date_time <= current_time + timedelta(hours=1):
+        errors.append("Date and time must be at least 1 hour in the future.")
+    if sun_distance <= 0:
+        errors.append("Sun distance must be a positive value.")
+    if moon_distance <= 0:
+        errors.append("Moon distance must be a positive value.")
+    return errors
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.json
+    try:
+        # Extract input values from the request
+        place = data['place']
+        depth = float(data['depth'])
+        date_time = datetime.strptime(data['datetime'], "%Y-%m-%dT%H:%M")
+
+        # Geocode the place to get latitude and longitude
+        lat, lon = geocode_place(place)
+
+        # Get sun and moon distance data
+        sun_distance = float(data['sun_distance'])
+        moon_distance = float(data['moon_distance'])
+ 
+        # Validate inputs
+        errors = validate_inputs(lat, lon, depth, sun_distance, moon_distance, date_time)
+        if errors:
+            return jsonify({"errors": errors}), 400
+
+        # Scale inputs
+        latitude_scaled = minmax_scale(lat, latitude_min, latitude_max)
+        longitude_scaled = minmax_scale(lon, longitude_min, longitude_max)
+        depth_scaled = minmax_scale(depth, depth_min, depth_max)
+        sun_distance_scaled = minmax_scale(sun_distance, sun_distance_min, sun_distance_max)
+        moon_distance_scaled = minmax_scale(moon_distance, moon_distance_min, moon_distance_max)
+        year_scaled = minmax_scale(date_time.year, year_min, year_max)
+        month_scaled = minmax_scale(date_time.month, month_min, month_max)
+        day_scaled = minmax_scale(date_time.day, day_min, day_max) 
+        hour_scaled = minmax_scale(date_time.hour, hour_min, hour_max)
+
+        # Prepare the input array (ensure the shape is correct for LSTM)
+
+        year, month, day, hour = date_time.year, date_time.month, date_time.day, date_time.hour
+        inputs = np.array([[latitude_scaled, longitude_scaled, depth_scaled, year_scaled, month_scaled, day_scaled, hour_scaled, sun_distance_scaled, moon_distance_scaled]])
+        inputs = np.expand_dims(inputs, axis=0) # Ensure batch size dimension is added 
+       
+        # Make prediction
+        normalized_prediction = model.predict(inputs)[0]
+        actual_magnitude = float(minmax_inverse_scale(normalized_prediction, magnitude_min, magnitude_max))
+
+        return jsonify({
+            "place": place,
+            "latitude": lat,
+            "longitude": lon,
+            "depth": depth,
+            "sun_distance": sun_distance,
+            "moon_distance": moon_distance,
+            "predicted_magnitude": actual_magnitude
+            
+        })
+    
+    
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(debug=True), 
