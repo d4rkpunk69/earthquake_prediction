@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify, render_template
 from tensorflow.keras.models import load_model
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import requests
 from calendar import monthrange
@@ -15,9 +15,18 @@ longitude_min, longitude_max = 120.0, 130.0
 depth_min, depth_max = 0.0, 50.0
 magnitude_min, magnitude_max = 3.0, 8.0
 
-# Threshold for significant earthquake
-MAGNITUDE_THRESHOLD = 5.0
-CONSECUTIVE_DAYS_THRESHOLD = 3  # Minimum consecutive days for a true earthquake
+# Valid range for the Philippines
+philippines_lat_min, philippines_lat_max = 4.0, 21.0
+philippines_lon_min, philippines_lon_max = 116.0, 127.0
+
+# Year range for scaling
+year_min, year_max = 2016, 2024
+month_min, month_max = 1, 12
+
+month_names = [
+    "January", "February", "March", "April", "May", "June", 
+    "July", "August", "September", "October", "November", "December"
+]
 
 # Geocoding API configuration
 GEOCODING_API_KEY = "a60803bd9c024c418324bcb0155f9b57"
@@ -63,6 +72,18 @@ def get_sun_moon_distances(date_time):
 def index():
     return render_template('index.html')
 
+def decimal_to_dms(decimal_value):
+    """Convert a decimal degree value to degrees, minutes, and seconds (DMS)."""
+    is_negative = decimal_value < 0
+    decimal_value = abs(decimal_value)
+    degrees = int(decimal_value)
+    minutes = int((decimal_value - degrees) * 60)
+    seconds = round((decimal_value - degrees - minutes / 60) * 3600, 2)
+    if is_negative:
+        degrees = -degrees
+    return degrees, minutes, seconds
+
+
 @app.route('/predict', methods=['POST'])
 def predict():
     data = request.json
@@ -84,77 +105,91 @@ def predict():
 
         # Loop through the selected months (from start to end month)
         for month in range(start_month, end_month + 1):
-            # Get the number of days in the month
             _, num_days = monthrange(2025, month)
 
             # Loop through each day in the month
             for day in range(1, num_days + 1):
-                date_time = datetime(2025, month, day, 0, 0)
+                for depth in range(1, 32):  # Loop from 1 km to 31 km (inclusive)
+                    date_time = datetime(2025, month, day, 0, 0)
 
-                try:
                     # Get sun and moon distances
                     sun_distance, moon_distance = get_sun_moon_distances(date_time)
 
                     # Scale inputs
                     latitude_scaled = minmax_scale(lat, latitude_min, latitude_max)
                     longitude_scaled = minmax_scale(lon, longitude_min, longitude_max)
-                    depth_scaled = minmax_scale(10, depth_min, depth_max)  # Example depth at 10 km
+                    depth_scaled = minmax_scale(depth, 1.0, 31.0)
                     sun_distance_scaled = minmax_scale(sun_distance, sun_moon_data['sun_distance'].min(), sun_moon_data['sun_distance'].max())
                     moon_distance_scaled = minmax_scale(moon_distance, sun_moon_data['moon_distance'].min(), sun_moon_data['moon_distance'].max())
-                    year_scaled = minmax_scale(date_time.year, 2016, 2025)
-                    month_scaled = minmax_scale(month, 1, 12)
+                    year_scaled = minmax_scale(date_time.year, year_min, year_max)
+                    month_scaled = minmax_scale(date_time.month, month_min, month_max)
                     day_scaled = minmax_scale(day, 1, num_days)
 
-                    # Prepare the input array (ensure the shape is correct for LSTM)
+                    # Prepare input array
                     inputs = np.array([[latitude_scaled, longitude_scaled, depth_scaled, year_scaled, month_scaled, day_scaled, 0, sun_distance_scaled, moon_distance_scaled]])
-                    inputs = np.expand_dims(inputs, axis=0)  # Add batch dimension
+                    inputs = np.expand_dims(inputs, axis=0)
 
                     # Make prediction
                     normalized_prediction = model.predict(inputs)[0]
                     actual_magnitude = float(minmax_inverse_scale(normalized_prediction, magnitude_min, magnitude_max))
 
-                    # Only consider significant predictions
-                    if actual_magnitude >= MAGNITUDE_THRESHOLD:
-                        predictions.append({
-                            "date": date_time,
-                            "predicted_magnitude": actual_magnitude
-                        })
+                    predictions.append({
+                        "month": month,
+                        "week": (day - 1) // 7 + 1,  # Determine the week of the month
+                        "depth": depth,
+                        "predicted_magnitude": round(actual_magnitude, 2),
+                        "sun_distance": float(sun_distance),
+                        "moon_distance": float(moon_distance)
+                    })
 
-                except ValueError:
-                    continue
+        # Group predictions by week
+        weekly_predictions = {}
+        for prediction in predictions:
+            week_key = (prediction["month"], prediction["week"])
+            if week_key not in weekly_predictions:
+                weekly_predictions[week_key] = []
+            weekly_predictions[week_key].append(prediction["predicted_magnitude"])
 
-        # Analyze predictions for consecutive significant earthquakes
-        if predictions:
-            predictions = sorted(predictions, key=lambda x: x['date'])
+        # Calculate average magnitude and standard deviation per week
+        weekly_summary = []
+        for week_key, magnitudes in weekly_predictions.items():
+            avg_magnitude = np.mean(magnitudes)
+            std_dev = np.std(magnitudes)
+            weekly_summary.append({
+                "month": week_key[0],
+                "week": week_key[1],
+                "avg_magnitude": round(avg_magnitude, 2),
+                "std_dev": round(std_dev, 2)
+            })
 
-            consecutive_quakes = []
-            current_streak = [predictions[0]]
+        lat_dms = decimal_to_dms(lat)
+        lon_dms = decimal_to_dms(lon)
 
-            for i in range(1, len(predictions)):
-                if (predictions[i]['date'] - predictions[i - 1]['date']).days <= 1:
-                    current_streak.append(predictions[i])
-                else:
-                    if len(current_streak) >= CONSECUTIVE_DAYS_THRESHOLD:
-                        consecutive_quakes.append(current_streak)
-                    current_streak = [predictions[i]]
+        # Determine high or low likelihood
+        high_likelihood_weeks = [week for week in weekly_summary if week["avg_magnitude"] > 4.0 and week["std_dev"] < 0.5]
 
-            if len(current_streak) >= CONSECUTIVE_DAYS_THRESHOLD:
-                consecutive_quakes.append(current_streak)
+        if high_likelihood_weeks:
+            best_week = max(high_likelihood_weeks, key=lambda x: x["avg_magnitude"])
+            message = (f"High likelihood of an earthquake in {place} during the {best_week['week']} week of "
+                       f"{month_names[best_week['month'] - 1]} with an average magnitude of {best_week['avg_magnitude']}.")
+        else:
+            message = f"No significant likelihood of an earthquake in {place} during the specified months."
 
-            if consecutive_quakes:
-                most_likely_quake = max(consecutive_quakes, key=lambda x: max(q['predicted_magnitude'] for q in x))
-                start_date = most_likely_quake[0]['date']
-                end_date = most_likely_quake[-1]['date']
-                return jsonify({
-                    "place": place,
-                    "message": f"A significant earthquake is likely to occur between {start_date.strftime('%B %d')} and {end_date.strftime('%B %d')}.",
-                    "details": most_likely_quake
-                })
-
-        return jsonify({"place": place, "message": "It is unlikely for an earthquake to occur this month."})
+       
+        # Return the results
+        return jsonify({
+            "place": place,
+            "latitude": lat,
+            "latitude_dms": f"{abs(lat_dms[0])}°{lat_dms[1]}'{lat_dms[2]}\" {'S' if lat_dms[0] < 0 else 'N'}",
+            "longitude": lon,
+            "longitude_dms": f"{abs(lon_dms[0])}°{lon_dms[1]}'{lon_dms[2]}\" {'W' if lon_dms[0] < 0 else 'E'}",
+            "summary": weekly_summary,  # Example placeholder
+            "message": message  # Example placeholder
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True)
